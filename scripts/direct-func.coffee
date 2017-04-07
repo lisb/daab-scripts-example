@@ -39,7 +39,7 @@ module.exports = (robot) ->
   robot.respond /select/i, (res) ->
     res.send
       question: "SELECT?"
-      options: ["OPT1", "OPT2", "OPT3"]
+      options: ["OPT1", "OPT2", "OPT3", "0123456789012345678901234567890123456789012345678901234567890123456789"]
 
   robot.respond /task/i, (res) ->
     res.send
@@ -50,10 +50,48 @@ module.exports = (robot) ->
     res.send
       path:"sample.png"
 
+  robot.respond /ft/i, (res) ->
+    res.send
+      text: "file with text"
+      path: "sample.png"
+      name: "pic.png"
+      type: "image/png"
+      onsend: (sent, msg) ->
+        for file in msg.content.files
+          robot.direct.api.deleteAttachment(file.file_id)
+
+  robot.respond /multi/i, (res) ->
+    res.send
+      text: "multi upload"
+      path: ['./sample.png', './sample2.png']
+      name: ["name1.png", "name2.png"]
+
   robot.respond /pic/i, (res) ->
     res.send
       path:"sample.png"
       name:"pic.png"
+
+  ## close action stamp
+
+  robot.respond /close/, (res) ->
+    res.send
+      question: "CLOSE YESNO?"
+      onsend: (sent) ->
+         res.send
+           close_yesno: sent.message.id
+    res.send
+      question: "CLOSE SELECT?"
+      options: ["OPT1"]
+      onsend: (sent) ->
+         res.send
+           close_select: sent.message.id
+    res.send
+      title: "CLOSE TODO?"
+      closing_type: 0 # ANY:0, ALL:1
+      onsend: (sent) ->
+         res.send
+           close_task: sent.message.id
+
 
   # Receiving
 
@@ -78,17 +116,70 @@ module.exports = (robot) ->
     else
       res.send "Your task is #{if res.json.done then 'done' else 'undone'}."
 
-  robot.respond "file", (res) ->
+  # reply to action stamps
+
+  robot.respond "yesno", (res) ->
+    if not res.json.response?
+      console.log "in_reply_to " + res.message.id
+      res.send
+        in_reply_to: res.message.id
+        response: true
+
+  robot.respond "select", (res) ->
+    if not res.json.response?
+      res.send
+        in_reply_to: res.message.id
+        response: 0
+
+  robot.respond "task", (res) ->
+    if not res.json.done?
+      res.send
+        in_reply_to: res.message.id
+        done: true
+
+  # answers
+  robot.respond /answers/i, (res) ->
+    res.send
+      question: "answer?"
+      onsend: (sent) ->
+        setTimeout ->
+          sent.answer (trueUsers, falseUsers, r, q) ->
+            console.log "YES", trueUsers
+            console.log "NO", falseUsers
+            console.log "===", r
+            console.log "---", q
+        , 5000
+
+
+  onfile = (res, file) ->
     res.send "File received.
-      name: #{res.json.name}
-      type: #{res.json.content_type}
-      size: #{res.json.content_size}bytes"
-    res.download res.json, (path) ->
+      name: #{file.name}
+      type: #{file.content_type}
+      size: #{file.content_size}bytes"
+    res.download file, (path) ->
       res.send "downloaded to #{path}"
-      if res.json.content_type.match(/^text/)
+      if file.content_type.match(/^text/)
         res.send "content is " + require('fs').readFileSync(path, 'utf8').substring(0, 10)
 
+  robot.respond "file", (res) ->
+    console.log "message type: 'file'"
+    onfile(res, res.json)
+
+  robot.hear "files", (res) ->
+    console.log "message type: 'files'"
+    for file in res.json.files
+      onfile(res, file)
+    res.send "with text: #{res.json.text}" if res.json.text
+
+  robot.direct.on "get_file_responsed", (res) ->
+    console.log res.files
+  robot.hear /fl/, (res) ->
+    robot.direct.api.getAttachments { id: res.message.rooms[res.message.room].id_i64 }
+
   robot.respond "map", (res) ->
+    res.send "Your location is #{res.json.place} at #{res.json.lat}, #{res.json.lng}"
+
+  robot.hear "map", (res) ->
     res.send "Your location is #{res.json.place} at #{res.json.lat}, #{res.json.lng}"
 
   robot.respond /({.*})/, (res) ->
@@ -138,6 +229,12 @@ module.exports = (robot) ->
     user = users[userId]
     res.send JSON.stringify(robot.brain.userForName(user.name))
 
+  robot.respond /usermap/i, (res) ->
+    users = robot.brain.users()
+    console.log Object.keys(users).map((id) ->
+      u = users[id]
+      "#{u.name}: #{robot.direct.stringifyInt64(u.id_i64)}"
+    )
 
   # Domain Info
 
@@ -163,6 +260,7 @@ module.exports = (robot) ->
   robot.hear /read after/, (res) ->
     res.send
       text: "Read thie message, please!"
+      onread: () -> true
       onsend: (sent) ->
         console.log sent
         setTimeout ->
@@ -182,9 +280,9 @@ module.exports = (robot) ->
 
   robot.hear /onsend/, (res) ->
     res.send
-      text: "Check console."
+      text: "Now sending..."
       onsend: (sent) ->
-        console.log "sent text.", sent
+        res.send "completed. messageId: #{sent.message.id}"
     res.send
       path:"sample.png"
       onsend: (sent) ->
@@ -196,6 +294,9 @@ module.exports = (robot) ->
     res.send "Good bye!"
     res.leave()
 
+  robot.hear /banned word/, (res) ->
+    res.leave res.message.user
+
   robot.respond /announce( to (.*))?/i, (res) ->
     res.announce "THIS IS AN ANNOUNCEMENT!"
 
@@ -205,6 +306,14 @@ module.exports = (robot) ->
         robot.announce domain, "ANNOUNCEMENT!" if domain.name.indexOf(search) >= 0
                       # or { id: id }
 
+  robot.respond /domainId/i, (res) ->
+    id = res.message.rooms[res.message.room].domainId
+    console.log id
+    id64 = res.message.rooms[res.message.room].domainId_i64
+    console.log robot.direct.stringifyInt64(id64)
+
   console.log robot.direct.parseInt64('288691111457718272')
   console.log robot.direct.stringifyInt64(robot.direct.parseInt64('288691111457718272'))
 
+  robot.respond /uuu/, (res) ->
+    console.log res.message.user
